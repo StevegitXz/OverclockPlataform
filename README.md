@@ -5,6 +5,8 @@ A plataforma permite iniciar sessões de estudo, acompanhar metas diárias e vis
 
 O objetivo do projeto é ajudar estudantes a **manter consistência e disciplina**, além de fornecer uma visão clara do progresso ao longo do tempo.
 
+Projeto iniciado devido a falta de plataformas que focasem em foco puro durante a jornada de estudos, com dados sincronizados em dispositivos.
+
 ---
 
 # 🚀 Demonstração
@@ -73,7 +75,7 @@ No contexto do projeto:
 ### Frontend
 
 * HTML
-* CSS
+* CSS em junção com tailwind
 * JavaScript
 
 ### Bibliotecas
@@ -153,7 +155,7 @@ Fluxo de login:
 ### 1️⃣ Clonar o repositório
 
 ```bash
-git clone https://github.com/seu-usuario/overclock.git
+git clone https://github.com/StevegitXz/OverclockPlataform.git
 ```
 
 ---
@@ -244,4 +246,4 @@ Este projeto é open source e pode ser utilizado para fins educacionais e pessoa
 
 # 👨‍💻 Autor
 
-Projeto desenvolvido por **Estevão**.
+Projeto desenvolvido por **Estevão Emanuel**.

@@ -36,6 +36,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   await bootstrapAuth();
 });
 
+//Getgetgetget
+
 function cacheDom() {
   dom.views = document.querySelectorAll('.view-content');
   dom.navLinks = document.querySelectorAll('.nav-link');
@@ -1100,3 +1102,6 @@ function escapeHtml(text) {
 window.addEventListener('beforeunload', () => {
   authSubscription?.unsubscribe?.();
 });
+
+
+//A chatgpt bom
