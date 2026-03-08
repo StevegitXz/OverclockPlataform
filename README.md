@@ -244,4 +244,4 @@ Este projeto é open source e pode ser utilizado para fins educacionais e pessoa
 
 # 👨‍💻 Autor
 
-Projeto desenvolvido por **Estevão (Nero)**.
+Projeto desenvolvido por **Estevão**.
