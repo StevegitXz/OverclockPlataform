@@ -100,7 +100,7 @@ function cacheDom() {
   dom.authFeedback = document.getElementById('auth-feedback');
   dom.authStatusPill = document.getElementById('auth-status-pill');
   dom.authUserEmail = document.getElementById('auth-user-email');
-  dom.signOutBtn = document.getElementById('sign-out-btn');
+  dom.signOutBtns = [document.getElementById('sign-out-btn'), document.getElementById('desktop-sign-out-btn')].filter(Boolean);
 }
 
 function bindEvents() {
@@ -134,7 +134,7 @@ function bindEvents() {
   });
 
   dom.authSendLinkBtn.addEventListener('click', requestMagicLink);
-  dom.signOutBtn.addEventListener('click', signOut);
+  dom.signOutBtns.forEach(button => button.addEventListener('click', signOut));
   dom.authEmail.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') requestMagicLink();
   });
@@ -274,9 +274,9 @@ async function requestMagicLink() {
 
 async function signOut() {
   if (!supabaseClient) return;
-  setButtonBusy(dom.signOutBtn, true, 'Saindo...');
+  dom.signOutBtns.forEach(button => setButtonBusy(button, true, 'Saindo...'));
   const { error } = await supabaseClient.auth.signOut();
-  setButtonBusy(dom.signOutBtn, false, 'Sair');
+  dom.signOutBtns.forEach(button => setButtonBusy(button, false, 'Sair'));
   if (error) {
     console.error(error);
     showFeedback(dom.authFeedback, `Não foi possível sair: ${error.message}`, false);
@@ -287,14 +287,14 @@ function updateAuthUi() {
   if (currentUser) {
     dom.authGuard.classList.add('hidden');
     dom.authUserEmail.textContent = currentUser.email ?? 'Sessão autenticada';
-    dom.signOutBtn.classList.remove('hidden');
+    dom.signOutBtns.forEach(button => button.classList.remove('hidden'));
     if (!dom.authStatusPill.textContent || dom.authStatusPill.textContent === 'Aguardando login') {
       setSyncStatus('Sincronizado', 'success');
     }
   } else {
     dom.authGuard.classList.remove('hidden');
     dom.authUserEmail.textContent = 'Entre para sincronizar seus dados';
-    dom.signOutBtn.classList.add('hidden');
+    dom.signOutBtns.forEach(button => button.classList.add('hidden'));
     setSyncStatus('Aguardando login', 'idle');
   }
 }
