@@ -1,25 +1,25 @@
-const STORAGE_KEY = 'overclock.app.state.v1';
 const COLORS = ['#8B5CF6', '#EF4444', '#EAB308', '#FB923C', '#22D3EE', '#10B981', '#F472B6'];
 
 const defaultState = {
-  subjects: [
-    { id: crypto.randomUUID(), name: 'Linguagens', color: '#8B5CF6' },
-    { id: crypto.randomUUID(), name: 'Física', color: '#FB923C' }
-  ],
+  subjects: [],
   sessions: [],
   settings: {
     dailyGoalMinutes: 240
   }
 };
 
-let state = loadState();
+let state = structuredClone(defaultState);
 let weeklyChart = null;
 let subjectToDeleteId = null;
-let selectedSubjectColor = state.subjects[0]?.color ?? COLORS[0];
+let selectedSubjectColor = COLORS[0];
+let currentUser = null;
+let supabaseClient = null;
+let authSubscription = null;
 
 const timerState = {
   intervalId: null,
   startedAt: null,
+  startedAtIso: null,
   subjectId: null,
   notes: '',
   elapsedSeconds: 0
@@ -27,11 +27,13 @@ const timerState = {
 
 const dom = {};
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   cacheDom();
   bindEvents();
+  initSupabase();
   lucide.createIcons();
   renderAll();
+  await bootstrapAuth();
 });
 
 function cacheDom() {
@@ -91,6 +93,14 @@ function cacheDom() {
   dom.deleteMateriaName = document.getElementById('delete-materia-name');
   dom.closeDeleteModalBtn = document.getElementById('close-delete-modal-btn');
   dom.confirmDeleteBtn = document.getElementById('confirm-delete-btn');
+
+  dom.authGuard = document.getElementById('auth-guard');
+  dom.authEmail = document.getElementById('auth-email');
+  dom.authSendLinkBtn = document.getElementById('auth-send-link-btn');
+  dom.authFeedback = document.getElementById('auth-feedback');
+  dom.authStatusPill = document.getElementById('auth-status-pill');
+  dom.authUserEmail = document.getElementById('auth-user-email');
+  dom.signOutBtn = document.getElementById('sign-out-btn');
 }
 
 function bindEvents() {
@@ -122,6 +132,255 @@ function bindEvents() {
   dom.deleteModal.addEventListener('click', (event) => {
     if (event.target === dom.deleteModal) closeDeleteModal();
   });
+
+  dom.authSendLinkBtn.addEventListener('click', requestMagicLink);
+  dom.signOutBtn.addEventListener('click', signOut);
+  dom.authEmail.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') requestMagicLink();
+  });
+}
+
+function initSupabase() {
+  const config = window.OVERCLOCK_SUPABASE_CONFIG;
+  if (!config?.projectUrl || !config?.publishableKey) {
+    showFeedback(dom.authFeedback, 'Preencha o arquivo supabase-config.js antes de iniciar.', false);
+    setSyncStatus('Configurar Supabase', 'error');
+    return;
+  }
+
+  supabaseClient = window.supabase.createClient(config.projectUrl, config.publishableKey, {
+    auth: {
+      autoRefreshToken: true,
+      persistSession: true,
+      detectSessionInUrl: true
+    },
+    global: {
+      headers: {
+        'x-application-name': 'overclock-web'
+      }
+    }
+  });
+}
+
+async function bootstrapAuth() {
+  if (!supabaseClient) return;
+
+  setSyncStatus('Aguardando login', 'idle');
+
+  const { data } = supabaseClient.auth.onAuthStateChange((event) => {
+    setTimeout(() => {
+      handleAuthEvent(event).catch((error) => {
+        console.error('Falha ao processar evento de autenticação:', error);
+      });
+    }, 0);
+  });
+  authSubscription = data.subscription;
+
+  await refreshCurrentUser();
+}
+
+async function handleAuthEvent(event) {
+  if (event === 'SIGNED_OUT') {
+    await applyUser(null);
+    return;
+  }
+
+  if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED') {
+    await refreshCurrentUser();
+  }
+}
+
+async function refreshCurrentUser() {
+  if (!supabaseClient) return;
+  const { data, error } = await supabaseClient.auth.getUser();
+  if (error) {
+    console.error('Falha ao verificar usuário autenticado:', error);
+    await applyUser(null);
+    return;
+  }
+
+  await applyUser(data.user ?? null);
+}
+
+async function applyUser(user) {
+  const previousUserId = currentUser?.id ?? null;
+  currentUser = user;
+  updateAuthUi();
+
+  if (!currentUser) {
+    stopTimerInterval();
+    resetTimerUi();
+    clearRemoteState();
+    renderAll();
+    return;
+  }
+
+  if (previousUserId !== currentUser.id || !state.subjects.length && !state.sessions.length) {
+    await loadRemoteState();
+  } else {
+    renderAll();
+    setSyncStatus('Sincronizado', 'success');
+  }
+}
+
+function clearRemoteState() {
+  state = structuredClone(defaultState);
+  selectedSubjectColor = COLORS[0];
+  currentUser = null;
+}
+
+async function requestMagicLink() {
+  hideFeedback(dom.authFeedback);
+
+  if (!supabaseClient) {
+    showFeedback(dom.authFeedback, 'Supabase não configurado corretamente.', false);
+    return;
+  }
+
+  if (window.location.protocol === 'file:') {
+    showFeedback(dom.authFeedback, 'Abra o projeto com Live Server ou publique no GitHub Pages. Magic link não redireciona para file://.', false);
+    return;
+  }
+
+  const email = dom.authEmail.value.trim().toLowerCase();
+  if (!email || !email.includes('@')) {
+    showFeedback(dom.authFeedback, 'Digite um e-mail válido.', false);
+    return;
+  }
+
+  setButtonBusy(dom.authSendLinkBtn, true, 'Enviando...');
+  setSyncStatus('Enviando link', 'busy');
+
+  const redirectTo = `${window.location.origin}${window.location.pathname}`;
+  const { error } = await supabaseClient.auth.signInWithOtp({
+    email,
+    options: {
+      emailRedirectTo: redirectTo
+    }
+  });
+
+  setButtonBusy(dom.authSendLinkBtn, false, 'Enviar magic link');
+
+  if (error) {
+    console.error(error);
+    showFeedback(dom.authFeedback, `Não foi possível enviar o link: ${error.message}`, false);
+    setSyncStatus('Falha no login', 'error');
+    return;
+  }
+
+  showFeedback(dom.authFeedback, 'Magic link enviado. Abra o e-mail no PC ou no celular e volte para o Overclock.', true);
+  setSyncStatus('Link enviado', 'idle');
+}
+
+async function signOut() {
+  if (!supabaseClient) return;
+  setButtonBusy(dom.signOutBtn, true, 'Saindo...');
+  const { error } = await supabaseClient.auth.signOut();
+  setButtonBusy(dom.signOutBtn, false, 'Sair');
+  if (error) {
+    console.error(error);
+    showFeedback(dom.authFeedback, `Não foi possível sair: ${error.message}`, false);
+  }
+}
+
+function updateAuthUi() {
+  if (currentUser) {
+    dom.authGuard.classList.add('hidden');
+    dom.authUserEmail.textContent = currentUser.email ?? 'Sessão autenticada';
+    dom.signOutBtn.classList.remove('hidden');
+    if (!dom.authStatusPill.textContent || dom.authStatusPill.textContent === 'Aguardando login') {
+      setSyncStatus('Sincronizado', 'success');
+    }
+  } else {
+    dom.authGuard.classList.remove('hidden');
+    dom.authUserEmail.textContent = 'Entre para sincronizar seus dados';
+    dom.signOutBtn.classList.add('hidden');
+    setSyncStatus('Aguardando login', 'idle');
+  }
+}
+
+function setSyncStatus(text, variant = 'idle') {
+  dom.authStatusPill.textContent = text;
+  dom.authStatusPill.className = 'inline-flex items-center rounded-full px-4 py-2 text-xs font-bold uppercase tracking-[0.22em]';
+
+  if (variant === 'success') {
+    dom.authStatusPill.classList.add('bg-emerald-400/20', 'text-emerald-100');
+  } else if (variant === 'busy') {
+    dom.authStatusPill.classList.add('bg-amber-300/20', 'text-amber-50');
+  } else if (variant === 'error') {
+    dom.authStatusPill.classList.add('bg-rose-400/20', 'text-rose-100');
+  } else {
+    dom.authStatusPill.classList.add('bg-white/15', 'text-white/90');
+  }
+}
+
+function setButtonBusy(button, isBusy, busyText) {
+  if (!button.dataset.defaultText) button.dataset.defaultText = button.textContent;
+  button.disabled = isBusy;
+  button.classList.toggle('opacity-60', isBusy);
+  button.classList.toggle('cursor-not-allowed', isBusy);
+  button.textContent = isBusy ? busyText : button.dataset.defaultText;
+}
+
+async function loadRemoteState() {
+  if (!supabaseClient || !currentUser) return;
+
+  setSyncStatus('Sincronizando', 'busy');
+  hideFeedback(dom.authFeedback);
+
+  const userId = currentUser.id;
+
+  const [subjectsRes, sessionsRes, settingsRes] = await Promise.all([
+    supabaseClient
+      .from('subjects')
+      .select('id, name, color, created_at, user_id')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: true }),
+    supabaseClient
+      .from('study_sessions')
+      .select('id, subject_id, duration_seconds, notes, created_at, started_at, ended_at, user_id')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false }),
+    supabaseClient
+      .from('app_settings')
+      .select('daily_goal_minutes')
+      .eq('user_id', userId)
+      .limit(1)
+  ]);
+
+  const error = subjectsRes.error || sessionsRes.error || settingsRes.error;
+  if (error) {
+    console.error('Falha ao sincronizar dados:', error);
+    showFeedback(dom.authFeedback, `Não consegui sincronizar com o Supabase: ${error.message}`, false);
+    setSyncStatus('Erro de sincronização', 'error');
+    return;
+  }
+
+  state = {
+    subjects: (subjectsRes.data || []).map(subject => ({
+      id: subject.id,
+      name: subject.name,
+      color: subject.color
+    })),
+    sessions: (sessionsRes.data || []).map(session => ({
+      id: session.id,
+      subjectId: session.subject_id,
+      durationSeconds: session.duration_seconds,
+      notes: session.notes || '',
+      createdAt: session.created_at,
+      startedAt: session.started_at,
+      endedAt: session.ended_at
+    })),
+    settings: {
+      dailyGoalMinutes: Number(settingsRes.data?.[0]?.daily_goal_minutes) >= 0
+        ? Number(settingsRes.data[0].daily_goal_minutes)
+        : defaultState.settings.dailyGoalMinutes
+    }
+  };
+
+  selectedSubjectColor = state.subjects[0]?.color ?? COLORS[0];
+  renderAll();
+  setSyncStatus('Sincronizado', 'success');
 }
 
 function showView(viewId) {
@@ -150,7 +409,6 @@ function showView(viewId) {
 }
 
 function renderAll() {
-  saveState();
   renderSubjectOptions();
   renderSubjectsList();
   renderGoalState();
@@ -350,6 +608,11 @@ function updateTimerHeroSubject() {
 function startTimer() {
   hideFeedback(dom.timerFeedback);
 
+  if (!currentUser) {
+    showFeedback(dom.timerFeedback, 'Entre com seu e-mail para começar a registrar.', false);
+    return;
+  }
+
   if (!state.subjects.length) {
     showFeedback(dom.timerFeedback, 'Cadastre uma matéria antes de iniciar.', false);
     showView('materias');
@@ -370,6 +633,7 @@ function startTimer() {
   dom.timerFinishedView.classList.add('hidden');
 
   timerState.startedAt = Date.now();
+  timerState.startedAtIso = new Date().toISOString();
   timerState.subjectId = subjectId;
   timerState.notes = dom.timerNotes.value.trim();
   timerState.elapsedSeconds = 0;
@@ -395,11 +659,40 @@ function cancelTimer() {
   showView('timer');
 }
 
-function finishTimer() {
+async function finishTimer() {
   stopTimerInterval();
 
-  if (timerState.elapsedSeconds <= 0 || !timerState.subjectId) {
+  if (timerState.elapsedSeconds <= 0 || !timerState.subjectId || !currentUser) {
     resetTimerUi();
+    return;
+  }
+
+  setButtonBusy(dom.finishTimerBtn, true, 'Salvando...');
+  setButtonBusy(dom.cancelTimerBtn, true, '...');
+  setSyncStatus('Salvando sessão', 'busy');
+
+  const finishedSession = {
+    user_id: currentUser.id,
+    subject_id: timerState.subjectId,
+    duration_seconds: timerState.elapsedSeconds,
+    notes: timerState.notes,
+    created_at: new Date().toISOString(),
+    started_at: timerState.startedAtIso,
+    ended_at: new Date().toISOString()
+  };
+
+  const { error } = await supabaseClient.from('study_sessions').insert(finishedSession);
+
+  setButtonBusy(dom.finishTimerBtn, false, 'Parar');
+  setButtonBusy(dom.cancelTimerBtn, false, 'Cancelar');
+
+  if (error) {
+    console.error(error);
+    document.body.classList.remove('focus-mode');
+    resetTimerUi();
+    showView('timer');
+    showFeedback(dom.timerFeedback, `Não foi possível salvar a sessão: ${error.message}`, false);
+    setSyncStatus('Erro ao salvar', 'error');
     return;
   }
 
@@ -408,40 +701,36 @@ function finishTimer() {
   dom.focusMeta.style.transition = 'opacity 0.4s ease';
   dom.focusMeta.style.opacity = '0';
 
-  const finishedSession = {
-    id: crypto.randomUUID(),
-    subjectId: timerState.subjectId,
-    durationSeconds: timerState.elapsedSeconds,
-    notes: timerState.notes,
-    createdAt: new Date().toISOString()
-  };
+  const subjectName = getSubjectById(timerState.subjectId)?.name ?? 'Matéria';
+  dom.finishedTimeDisplay.textContent = humanReadableDuration(timerState.elapsedSeconds);
+  dom.finishedSessionSummary.textContent = `${subjectName} • ${formatDuration(timerState.elapsedSeconds)}${timerState.notes ? ` • ${timerState.notes}` : ''}`;
 
-  state.sessions.push(finishedSession);
-  saveState();
-
-  const subjectName = getSubjectById(finishedSession.subjectId)?.name ?? 'Matéria';
-  dom.finishedTimeDisplay.textContent = humanReadableDuration(finishedSession.durationSeconds);
-  dom.finishedSessionSummary.textContent = `${subjectName} • ${formatDuration(finishedSession.durationSeconds)}${finishedSession.notes ? ` • ${finishedSession.notes}` : ''}`;
+  await loadRemoteState();
 
   setTimeout(() => {
     document.body.classList.remove('focus-mode');
     document.body.classList.add('finished-mode');
     dom.timerActiveView.classList.add('hidden');
     dom.timerFinishedView.classList.remove('hidden');
-    renderAll();
+    resetTimerStateOnly();
   }, 800);
 }
 
-function resetTimerUi() {
+function resetTimerStateOnly() {
   timerState.startedAt = null;
+  timerState.startedAtIso = null;
   timerState.subjectId = null;
   timerState.notes = '';
   timerState.elapsedSeconds = 0;
   dom.timerNotes.value = '';
+  updateTimerDisplay(0);
+}
+
+function resetTimerUi() {
+  resetTimerStateOnly();
   dom.focusBlob.classList.remove('blob-pop');
   dom.focusBlob.style.opacity = '1';
   dom.focusMeta.style.opacity = '1';
-  updateTimerDisplay(0);
 
   dom.timerSetupView.classList.remove('hidden');
   dom.timerActiveView.classList.add('hidden');
@@ -484,8 +773,13 @@ function createExplosionParticles() {
   }
 }
 
-function saveSubject() {
+async function saveSubject() {
   hideFeedback(dom.subjectFormFeedback);
+
+  if (!currentUser) {
+    showFeedback(dom.subjectFormFeedback, 'Faça login antes de editar suas matérias.', false);
+    return;
+  }
 
   const name = dom.subjectName.value.trim();
   const editId = dom.subjectEditId.value;
@@ -501,24 +795,43 @@ function saveSubject() {
     return;
   }
 
+  setButtonBusy(dom.saveSubjectBtn, true, 'Salvando...');
+  setSyncStatus('Salvando matéria', 'busy');
+
+  let error = null;
+
   if (editId) {
-    const subject = state.subjects.find(item => item.id === editId);
-    if (subject) {
-      subject.name = name;
-      subject.color = selectedSubjectColor;
-      showFeedback(dom.subjectFormFeedback, 'Matéria atualizada com sucesso.', true);
-    }
+    ({ error } = await supabaseClient
+      .from('subjects')
+      .update({
+        name,
+        color: selectedSubjectColor,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', editId)
+      .eq('user_id', currentUser.id));
   } else {
-    state.subjects.push({
-      id: crypto.randomUUID(),
-      name,
-      color: selectedSubjectColor
-    });
-    showFeedback(dom.subjectFormFeedback, 'Matéria criada com sucesso.', true);
+    ({ error } = await supabaseClient
+      .from('subjects')
+      .insert({
+        user_id: currentUser.id,
+        name,
+        color: selectedSubjectColor
+      }));
+  }
+
+  setButtonBusy(dom.saveSubjectBtn, false, 'Salvar');
+
+  if (error) {
+    console.error(error);
+    showFeedback(dom.subjectFormFeedback, `Não foi possível salvar a matéria: ${error.message}`, false);
+    setSyncStatus('Erro ao salvar', 'error');
+    return;
   }
 
   clearSubjectForm(false);
-  renderAll();
+  await loadRemoteState();
+  showFeedback(dom.subjectFormFeedback, editId ? 'Matéria atualizada com sucesso.' : 'Matéria criada com sucesso.', true);
 }
 
 function startEditSubject(subjectId) {
@@ -545,8 +858,14 @@ function selectColor(color) {
   });
 }
 
-function saveGoal() {
+async function saveGoal() {
   hideFeedback(dom.goalFeedback);
+
+  if (!currentUser) {
+    showFeedback(dom.goalFeedback, 'Faça login antes de salvar sua meta.', false);
+    return;
+  }
+
   const value = Number(dom.goalHoursInput.value);
 
   if (Number.isNaN(value) || value < 0 || value > 24) {
@@ -554,9 +873,30 @@ function saveGoal() {
     return;
   }
 
-  state.settings.dailyGoalMinutes = Math.round(value * 60);
-  saveState();
-  renderAll();
+  const dailyGoalMinutes = Math.round(value * 60);
+  setButtonBusy(dom.saveGoalBtn, true, 'Salvando...');
+  setSyncStatus('Salvando meta', 'busy');
+
+  const { error } = await supabaseClient
+    .from('app_settings')
+    .upsert({
+      user_id: currentUser.id,
+      daily_goal_minutes: dailyGoalMinutes,
+      updated_at: new Date().toISOString()
+    }, {
+      onConflict: 'user_id'
+    });
+
+  setButtonBusy(dom.saveGoalBtn, false, 'Salvar');
+
+  if (error) {
+    console.error(error);
+    showFeedback(dom.goalFeedback, `Não foi possível salvar a meta: ${error.message}`, false);
+    setSyncStatus('Erro ao salvar', 'error');
+    return;
+  }
+
+  await loadRemoteState();
   showFeedback(dom.goalFeedback, 'Meta diária salva com sucesso.', true);
 }
 
@@ -573,14 +913,30 @@ function closeDeleteModal() {
   dom.deleteModal.classList.add('hidden');
 }
 
-function confirmDelete() {
-  if (!subjectToDeleteId) return;
-  state.subjects = state.subjects.filter(subject => subject.id !== subjectToDeleteId);
-  state.sessions = state.sessions.filter(session => session.subjectId !== subjectToDeleteId);
-  saveState();
-  renderAll();
+async function confirmDelete() {
+  if (!subjectToDeleteId || !currentUser) return;
+
+  setButtonBusy(dom.confirmDeleteBtn, true, 'Apagando...');
+  setSyncStatus('Apagando matéria', 'busy');
+
+  const { error } = await supabaseClient
+    .from('subjects')
+    .delete()
+    .eq('id', subjectToDeleteId)
+    .eq('user_id', currentUser.id);
+
+  setButtonBusy(dom.confirmDeleteBtn, false, 'Apagar');
+
+  if (error) {
+    console.error(error);
+    showFeedback(dom.subjectFormFeedback, `Não foi possível excluir a matéria: ${error.message}`, false);
+    setSyncStatus('Erro ao excluir', 'error');
+    return;
+  }
+
   clearSubjectForm();
   closeDeleteModal();
+  await loadRemoteState();
 }
 
 function getSubjectById(subjectId) {
@@ -687,28 +1043,6 @@ function hideFeedback(element) {
   element.textContent = '';
 }
 
-function loadState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return structuredClone(defaultState);
-    const parsed = JSON.parse(raw);
-    return {
-      subjects: Array.isArray(parsed.subjects) && parsed.subjects.length ? parsed.subjects : structuredClone(defaultState.subjects),
-      sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
-      settings: {
-        dailyGoalMinutes: Number(parsed.settings?.dailyGoalMinutes) >= 0 ? Number(parsed.settings.dailyGoalMinutes) : defaultState.settings.dailyGoalMinutes
-      }
-    };
-  } catch (error) {
-    console.error('Falha ao carregar estado local:', error);
-    return structuredClone(defaultState);
-  }
-}
-
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
 function formatDuration(seconds) {
   const totalMinutes = Math.floor(seconds / 60);
   const hours = Math.floor(totalMinutes / 60);
@@ -762,3 +1096,7 @@ function escapeHtml(text) {
   div.textContent = text;
   return div.innerHTML;
 }
+
+window.addEventListener('beforeunload', () => {
+  authSubscription?.unsubscribe?.();
+});

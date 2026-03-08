@@ -3,13 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Overclock Plataform</title>
+  <title>Overclock — Study Tracker</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/lucide@latest"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./supabase-config.js"></script>
   <link rel="stylesheet" href="./styles.css" />
   <script defer src="./app.js"></script>
 </head>
@@ -40,6 +42,12 @@
           Matérias e Metas
         </button>
       </nav>
+
+      <div class="mt-auto pt-8 border-t border-white/15 max-md:mt-0 max-md:pt-0 max-md:border-0 max-md:flex max-md:items-center max-md:gap-3 max-md:flex-wrap">
+        <span id="auth-status-pill" class="inline-flex items-center rounded-full bg-white/15 px-4 py-2 text-xs font-bold uppercase tracking-[0.22em] text-white/90">Aguardando login</span>
+        <p id="auth-user-email" class="mt-3 text-sm text-white/75 break-all max-md:mt-0">Entre para sincronizar seus dados</p>
+        <button id="sign-out-btn" class="mt-4 hidden rounded-full border border-white/20 px-4 py-2 text-sm font-bold text-white transition hover:bg-white hover:text-[#7C3AED] max-md:mt-0">Sair</button>
+      </div>
     </aside>
 
     <main class="flex-1 ml-64 p-12 transition-all duration-500 max-md:ml-0 max-md:p-5">
@@ -277,6 +285,35 @@
         </div>
       </div>
     </main>
+  </div>
+
+  <div id="auth-guard" class="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/75 px-4 backdrop-blur-md">
+    <div class="w-full max-w-xl rounded-[2.5rem] border border-white/10 bg-slate-950/90 p-8 text-white shadow-2xl">
+      <div class="mb-8 flex items-center gap-3">
+        <span class="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-500/20 text-violet-300">
+          <i data-lucide="shield-check" class="h-6 w-6"></i>
+        </span>
+        <div>
+          <h2 class="text-2xl font-extrabold tracking-tight">Entrar no Overclock</h2>
+          <p class="text-sm text-white/65">Use o mesmo e-mail no PC e no celular para sincronizar tudo.</p>
+        </div>
+      </div>
+
+      <div class="grid gap-4">
+        <label class="grid gap-2">
+          <span class="text-sm font-semibold text-white/80">Seu e-mail</span>
+          <input id="auth-email" type="email" placeholder="voce@email.com" class="w-full rounded-2xl border border-white/10 bg-white/10 px-5 py-4 text-base text-white outline-none ring-0 placeholder:text-white/35 focus:border-violet-400">
+        </label>
+
+        <button id="auth-send-link-btn" class="rounded-2xl bg-violet-500 px-5 py-4 text-base font-extrabold text-white transition hover:bg-violet-400">Enviar magic link</button>
+
+        <div class="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-white/70">
+          Para o link funcionar, cadastre no Supabase a URL do seu site em <strong>Authentication → URL Configuration</strong>. Em ambiente local, abra com Live Server ou outro servidor HTTP — não via <code>file://</code>.
+        </div>
+
+        <p id="auth-feedback" class="hidden text-sm font-medium"></p>
+      </div>
+    </div>
   </div>
 
   <div id="delete-modal" class="fixed inset-0 z-[100] flex items-center justify-center bg-white/30 backdrop-blur-md hidden transition-all duration-300 px-4">
